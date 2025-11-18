@@ -10,6 +10,85 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ============================================
+// CORE ENTITIES
+// ============================================
+
+// Community entity representing a group or organization
+model Community {
+  id               String                   @id @default(cuid())
+  name             String
+  slug             String                   @unique
+  description      String?
+  settings         String                   @default("{}") // JSON settings
+  avatarUrl        String?
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+
+  // Relations
+  members          Member[]
+  fragments        RawStoryFragment[]
+  projects         StoryWeaveProject[]
+  tags             Tag[]
+
+  @@index([slug])
+  @@index([createdAt])
+}
+
+// Member entity representing a user in a community
+model Member {
+  id               String                   @id @default(cuid())
+  communityId      String
+  externalUserId   String?                  // For integration with external auth
+  username         String
+  email            String?
+  displayName      String?
+  bio              String?
+  avatarUrl        String?
+  preferences      String                   @default("{}") // JSON preferences
+  status           MemberStatus             @default(ACTIVE)
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+
+  // Relations
+  community        Community                @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  fragments        RawStoryFragment[]
+  reactions        FragmentReaction[]
+  comments         Comment[]
+  projectsCollaborating ProjectCollaborator[]
+  activityLogs     ActivityLog[]
+
+  @@unique([communityId, username])
+  @@index([communityId])
+  @@index([externalUserId])
+}
+
+enum MemberStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+// Tag entity for categorizing fragments
+model Tag {
+  id               String                   @id @default(cuid())
+  communityId      String
+  name             String
+  slug             String
+  description      String?
+  color            String?                  // Hex color for UI
+  usageCount       Int                      @default(0)
+  createdAt        DateTime                 @default(now())
+
+  // Relations
+  community        Community                @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  fragmentTags     FragmentTag[]
+
+  @@unique([communityId, slug])
+  @@index([communityId])
+  @@index([usageCount])
+}
+
 // Individual story contributions from community members
 model RawStoryFragment {
   id               String                   @id @default(cuid())
@@ -17,31 +96,96 @@ model RawStoryFragment {
   communityId      String
   title            String
   bodyMarkdown     String
-  tagsJson         String                   @default("[]") // JSON array of tags
+  status           FragmentStatus           @default(PUBLISHED)
+  visibility       VisibilityLevel          @default(COMMUNITY)
+  metadata         String                   @default("{}") // JSON metadata
+  editCount        Int                      @default(0)
+  viewCount        Int                      @default(0)
   createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+  lastEditedAt     DateTime?
+  deletedAt        DateTime?                // Soft delete
 
   // Relations
+  community        Community                @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  member           Member                   @relation(fields: [memberId], references: [id], onDelete: Cascade)
   selections       StoryFragmentSelection[]
+  tags             FragmentTag[]
+  reactions        FragmentReaction[]
+  comments         Comment[]
 
   @@index([communityId])
   @@index([memberId])
+  @@index([status])
   @@index([createdAt])
+  @@index([deletedAt])
 }
+
+enum FragmentStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum VisibilityLevel {
+  PRIVATE
+  COMMUNITY
+  PUBLIC
+}
+
+// Join table for fragment tags
+model FragmentTag {
+  id               String                   @id @default(cuid())
+  fragmentId       String
+  tagId            String
+  createdAt        DateTime                 @default(now())
+
+  // Relations
+  fragment         RawStoryFragment         @relation(fields: [fragmentId], references: [id], onDelete: Cascade)
+  tag              Tag                      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([fragmentId, tagId])
+  @@index([fragmentId])
+  @@index([tagId])
+}
+
+// ============================================
+// PROJECT & WEAVING
+// ============================================
 
 // A weaving project that combines multiple story fragments
 model StoryWeaveProject {
   id                  String                   @id @default(cuid())
   communityId         String
+  createdBy           String                   // Member ID
   title               String
   descriptionMarkdown String
+  status              ProjectStatus            @default(ACTIVE)
+  visibility          VisibilityLevel          @default(COMMUNITY)
+  metadata            String                   @default("{}") // JSON metadata
+  aiGenerationCost    Float                    @default(0) // Track AI costs
   createdAt           DateTime                 @default(now())
+  updatedAt           DateTime                 @updatedAt
+  deletedAt           DateTime?                // Soft delete
 
   // Relations
+  community           Community                @relation(fields: [communityId], references: [id], onDelete: Cascade)
   fragmentSelections  StoryFragmentSelection[]
   wovenVersions       WovenStoryVersion[]
+  collaborators       ProjectCollaborator[]
+  comments            Comment[]
 
   @@index([communityId])
+  @@index([status])
   @@index([createdAt])
+  @@index([deletedAt])
+}
+
+enum ProjectStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+  COMPLETED
 }
 
 // Join table linking fragments to projects with a role
@@ -74,6 +218,7 @@ model WovenStoryVersion {
   versionNumber  Int
   bodyMarkdown   String
   aiMetadataJson String            @default("{}") // JSON with model, params, fragment mapping
+  generationCost Float             @default(0)    // Cost of this generation
   createdAt      DateTime          @default(now())
 
   // Relations
@@ -81,5 +226,105 @@ model WovenStoryVersion {
 
   @@unique([projectId, versionNumber])
   @@index([projectId])
+  @@index([createdAt])
+}
+
+// Collaborators on weaving projects
+model ProjectCollaborator {
+  id             String            @id @default(cuid())
+  projectId      String
+  memberId       String
+  role           CollaboratorRole  @default(VIEWER)
+  addedAt        DateTime          @default(now())
+
+  // Relations
+  project        StoryWeaveProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  member         Member            @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, memberId])
+  @@index([projectId])
+  @@index([memberId])
+}
+
+enum CollaboratorRole {
+  VIEWER
+  EDITOR
+  ADMIN
+}
+
+// ============================================
+// ENGAGEMENT & COLLABORATION
+// ============================================
+
+// Reactions on fragments
+model FragmentReaction {
+  id             String            @id @default(cuid())
+  fragmentId     String
+  memberId       String
+  reactionType   ReactionType
+  createdAt      DateTime          @default(now())
+
+  // Relations
+  fragment       RawStoryFragment  @relation(fields: [fragmentId], references: [id], onDelete: Cascade)
+  member         Member            @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([fragmentId, memberId, reactionType])
+  @@index([fragmentId])
+  @@index([memberId])
+}
+
+enum ReactionType {
+  LIKE
+  LOVE
+  INSIGHTFUL
+  INSPIRING
+}
+
+// Comments on fragments and projects
+model Comment {
+  id             String            @id @default(cuid())
+  memberId       String
+  fragmentId     String?
+  projectId      String?
+  parentId       String?           // For threaded comments
+  content        String
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  deletedAt      DateTime?
+
+  // Relations
+  member         Member            @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  fragment       RawStoryFragment? @relation(fields: [fragmentId], references: [id], onDelete: Cascade)
+  project        StoryWeaveProject? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parent         Comment?          @relation("CommentThread", fields: [parentId], references: [id], onDelete: Cascade)
+  replies        Comment[]         @relation("CommentThread")
+
+  @@index([fragmentId])
+  @@index([projectId])
+  @@index([memberId])
+  @@index([parentId])
+  @@index([createdAt])
+}
+
+// ============================================
+// AUDIT & ACTIVITY
+// ============================================
+
+// Activity log for audit trail
+model ActivityLog {
+  id             String            @id @default(cuid())
+  memberId       String?
+  action         String            // e.g., "fragment.created", "project.woven"
+  entityType     String            // e.g., "fragment", "project"
+  entityId       String
+  metadata       String            @default("{}") // JSON with action details
+  createdAt      DateTime          @default(now())
+
+  // Relations
+  member         Member?           @relation(fields: [memberId], references: [id], onDelete: SetNull)
+
+  @@index([memberId])
+  @@index([action])
+  @@index([entityType, entityId])
   @@index([createdAt])
 }

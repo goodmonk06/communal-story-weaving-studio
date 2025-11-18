@@ -1,0 +1,85 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Individual story contributions from community members
+model RawStoryFragment {
+  id               String                   @id @default(cuid())
+  memberId         String
+  communityId      String
+  title            String
+  bodyMarkdown     String
+  tagsJson         String                   @default("[]") // JSON array of tags
+  createdAt        DateTime                 @default(now())
+
+  // Relations
+  selections       StoryFragmentSelection[]
+
+  @@index([communityId])
+  @@index([memberId])
+  @@index([createdAt])
+}
+
+// A weaving project that combines multiple story fragments
+model StoryWeaveProject {
+  id                  String                   @id @default(cuid())
+  communityId         String
+  title               String
+  descriptionMarkdown String
+  createdAt           DateTime                 @default(now())
+
+  // Relations
+  fragmentSelections  StoryFragmentSelection[]
+  wovenVersions       WovenStoryVersion[]
+
+  @@index([communityId])
+  @@index([createdAt])
+}
+
+// Join table linking fragments to projects with a role
+model StoryFragmentSelection {
+  id         String             @id @default(cuid())
+  projectId  String
+  fragmentId String
+  role       FragmentRole       @default(SUPPORTING) // core, supporting, quote
+  createdAt  DateTime           @default(now())
+
+  // Relations
+  project    StoryWeaveProject  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  fragment   RawStoryFragment   @relation(fields: [fragmentId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, fragmentId])
+  @@index([projectId])
+  @@index([fragmentId])
+}
+
+enum FragmentRole {
+  CORE
+  SUPPORTING
+  QUOTE
+}
+
+// AI-generated narrative versions with full traceability
+model WovenStoryVersion {
+  id             String            @id @default(cuid())
+  projectId      String
+  versionNumber  Int
+  bodyMarkdown   String
+  aiMetadataJson String            @default("{}") // JSON with model, params, fragment mapping
+  createdAt      DateTime          @default(now())
+
+  // Relations
+  project        StoryWeaveProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, versionNumber])
+  @@index([projectId])
+  @@index([createdAt])
+}
